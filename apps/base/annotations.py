@@ -7,7 +7,7 @@ License
     Copyright (c) 2010-2012 Massachusetts Institute of Technology.
     MIT License (cf. MIT-LICENSE.txt or http://www.opensource.org/licenses/mit-license.php)
 """
-from django.db.models import Q
+from django.db.models import Q, Max
 from django.db.models import Count
 from django.db import transaction
 import datetime, os, re, json 
@@ -153,7 +153,9 @@ __NAMES = {
         "rotation": "source.rotation",
         "assignment": None, 
         "due": None, 
-        "filetype": "source.type"
+        "filetype": "source.type",
+        "date_published": "published",
+        "last_seen": "last_seen"
 },
            "ensembles2": {
                           "ID": "ensemble_id",
@@ -359,11 +361,8 @@ def get_files(uid, payload):
     names = __NAMES["files2"]
     my_memberships = M.Membership.objects.filter(user__id=uid,  deleted=False)
     my_ensembles = M.Ensemble.objects.filter(membership__in=my_memberships)
-    my_ownerships = M.Ownership.objects.select_related("source").filter(ensemble__in=my_ensembles, deleted=False) 
-    if id is not None:
-        my_ownerships = my_ownerships.filter(source__id=id)
+    my_ownerships = M.Ownership.objects.select_related("source").filter(ensemble__in=my_ensembles, deleted=False).annotate(last_seen=Max('source__sourcelastseen__ctime'))
     return UR.qs2dict(my_ownerships, names, "ID")
-
 
 def save_settings(uid, payload): 
     #print "save settings w/ payload %s" % (payload, )
@@ -379,14 +378,12 @@ def save_settings(uid, payload):
         m.save() 
         #DB().doTransaction("update nb2_user_settings set valid=0 where id_user=? and name=?", (uid, k))
         #DB().doTransaction("insert into nb2_user_settings(id_user, name, value) values (?, ?, ?)", (uid, k, payload[k]))
-    if "__PASSWD__" in payload: 
+    if "__PASSWD__" in payload:
         password = payload["__PASSWD__"]
         u = M.User.objects.get(pk=uid)
-        u.password = password
+        u.set_password(password)
         u.save()
     return get_settings(uid, {})
-        #DB().doTransaction("insert into nb2_user_settings(id_user, name, value, valid) values(?, '__PASSWD__',0, 0);update users set password=? where id=?", (uid, password, uid))
-
 
 def get_settings(uid, payload):
     ds = M.DefaultSetting.objects.all()
@@ -406,7 +403,7 @@ def getLocation(id):
         pass
     h5l_dict = UR.model2dict(h5l, __NAMES["html5location"], "ID") if h5l else {}
     return (loc_dict, h5l_dict)
-
+    
 def getTopCommentsFromLocations(location_ids):
     comments = {}
     for loc_id in location_ids:
@@ -1052,13 +1049,12 @@ def register_user(uid, P):
     u.lastname = P["lastname"]
     u.confkey = new_confkey
     u.email =  P["email"]
-    u.password = P["password"]
+    u.set_password(P["password"])
     u.guest = False
     u.save()
     gh = M.GuestHistory.objects.get(user=u)
     gh.t_end = datetime.datetime.now()
     gh.save()
-    #DB().doTransaction("update users set confkey=?, firstname=?, lastname=?, email=?, pseudonym=?, password=?, guest=0 where id=?;update nb4_guest_history set t_end=now() where id_user=?", (new_confkey, P["firstname"], P["lastname"], P["email"], P["pseudonym"], P["password"], uid, uid))
     return new_confkey
     
 
